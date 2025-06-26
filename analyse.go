@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -21,23 +22,21 @@ func (m *Metric) AddLabel(key, value string) {
 	m.Labels[key][value] = true
 }
 
-func analyze(filename string) {
-	data, err := parseFile(filename)
-	if err != nil {
-		fmt.Println("Error parsing file:", err)
-		return
-	}
-	fmt.Println(getReport(data))
-}
-
-func parseFile(filename string) (map[string]*Metric, error) {
+func analyze(filename string) string {
 	file, err := os.Open(filename)
 	if err != nil {
-		fmt.Println("Error opening file:", err)
-		return nil, err
+		return fmt.Sprintf("Error opening file: %s", err)
 	}
 	defer file.Close()
 
+	data, err := parseIO(file)
+	if err != nil {
+		return fmt.Sprintf("Error parsing file: %s", err)
+	}
+	return getReport(data)
+}
+
+func parseIO(file io.Reader) (map[string]*Metric, error) {
 	scanner := bufio.NewScanner(file)
 	series := make(map[string]*Metric)
 	for scanner.Scan() {
