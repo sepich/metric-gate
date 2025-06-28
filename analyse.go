@@ -29,41 +29,24 @@ func analyze(filename string) string {
 	}
 	defer file.Close()
 
-	data, err := parseIO(file)
+	data, err := parse(file)
 	if err != nil {
 		return fmt.Sprintf("Error parsing file: %s", err)
 	}
 	return getReport(data)
 }
 
-func parseIO(file io.Reader) (map[string]*Metric, error) {
+func parse(file io.Reader) (map[string]*Metric, error) {
 	scanner := bufio.NewScanner(file)
 	series := make(map[string]*Metric)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, "#") {
+		metricName, labels, _, err := parseLine(line)
+		if err != nil {
+			return nil, err
+		}
+		if metricName == "" {
 			continue
-		}
-
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid metric format:\n%s", line)
-		}
-		metricName := parts[0]
-		labels := make(map[string]string)
-		if strings.Contains(metricName, "{") {
-			nameAndLabels := strings.SplitN(metricName, "{", 2)
-			metricName = nameAndLabels[0]
-			labelStr := strings.TrimSuffix(nameAndLabels[1], "}")
-			for _, label := range strings.Split(labelStr, ",") {
-				labelParts := strings.SplitN(label, "=", 2)
-				if len(labelParts) != 2 {
-					continue
-				}
-				key := labelParts[0]
-				val := strings.Trim(labelParts[1], `"`)
-				labels[key] = val
-			}
 		}
 
 		metric, ok := series[metricName]
