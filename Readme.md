@@ -77,7 +77,7 @@ Run it near your target, e.g. as a sidecar container. And set `-upstream` to cor
     args:
         - -upstream=localhost:8081/metrics
         - |
-        -relabel=
+          -relabel=
             - action: labeldrop
               regex: path
     # ...
