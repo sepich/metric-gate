@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 
 	_ "net/http/pprof"
 
 	"github.com/prometheus/common/version"
+	"github.com/prometheus/prometheus/model/relabel"
+	"gopkg.in/yaml.v2"
 )
 
 type Options struct {
-	File        string
-	Upstream    string
-	Labels      map[string]bool
-	FilterNames *regexp.Regexp
-	Port        int
+	File     string
+	Upstream string
+	Relabel  []*relabel.Config
+	Port     int
 }
 
 // stringSliceFlag implements flag.Value
@@ -36,18 +36,17 @@ func (s *stringSliceFlag) Set(value string) error {
 func main() {
 	var opts Options
 	var ver bool
-	var labels stringSliceFlag
-	var regex string
+	var re, reFile string
 	flag.StringVar(&opts.File, "file", "", "Analyze file for metrics and label cardinality and exit")
 	flag.StringVar(&opts.Upstream, "upstream", "http://localhost:10254/metrics", "Source URL to get metrics from")
-	flag.Var(&labels, "label", "Label to remove by aggregation, can be specified multiple times")
-	flag.StringVar(&regex, "filter", "", "RegEx to drop metrics by")
+	flag.StringVar(&re, "relabel", "", "metric_relabel_configs contents")
+	flag.StringVar(&reFile, "relabel-file", "", "metric_relabel_configs file path")
 	flag.IntVar(&opts.Port, "port", 8080, "Port to serve aggregated metrics on")
 	flag.BoolVar(&ver, "version", false, "Show version and exit")
 	flag.Parse()
 
 	if ver {
-		fmt.Println(version.Print("prom-scrape-proxy"))
+		fmt.Println(version.Print("metric-gate"))
 		os.Exit(0)
 	}
 
@@ -59,12 +58,20 @@ func main() {
 	if !strings.Contains(opts.Upstream, "://") {
 		opts.Upstream = "http://" + opts.Upstream
 	}
-	opts.Labels = make(map[string]bool)
-	for _, label := range labels {
-		opts.Labels[label] = true
+	if re != "" && reFile != "" {
+		fmt.Println("Error: both `relabel` and `relabel-file` specified")
+		os.Exit(1)
 	}
-	if regex != "" {
-		opts.FilterNames = regexp.MustCompile(regex)
+	if reFile != "" {
+		data, err := os.ReadFile(reFile)
+		if err != nil {
+			fmt.Println("Error reading relabel-file:", err)
+			os.Exit(1)
+		}
+		yaml.Unmarshal(data, &opts.Relabel)
+	}
+	if re != "" {
+		yaml.Unmarshal([]byte(re), &opts.Relabel)
 	}
 
 	proxy := NewProxy(&opts)

@@ -56,8 +56,8 @@ func parse(file io.Reader) (map[string]*Metric, error) {
 			}
 			series[metricName] = metric
 		}
-		for key, value := range labels {
-			metric.AddLabel(key, value)
+		for _, l := range labels {
+			metric.AddLabel(l.Name, l.Value)
 		}
 		metric.Count++
 	}

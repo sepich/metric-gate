@@ -13,11 +13,11 @@ build: test ## Build binaries with version set
 	-X github.com/prometheus/common/version.BuildDate=`date +%Y/%m/%d-%H:%M:%SZ`"
 
 docker: ## Build docker image
-	@docker build --platform linux/amd64 -t prom-scrape-proxy .
+	@docker build --platform linux/amd64 -t metric-gate .
 
 push: ## Push docker image
-	docker tag prom-scrape-proxy sepa/prom-scrape-proxy
-	docker push sepa/prom-scrape-proxy
+	docker tag metric-gate sepa/metric-gate
+	docker push sepa/metric-gate
 
 test: ## Run tests
-	go test
+	@go test

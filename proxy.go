@@ -6,8 +6,20 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
 )
 
+// Data model for aggregation
+type Series map[string]*Seria // string = MetricName
+type Seria map[string]*SVal   // string = Labels.String()
+type SVal struct {
+	TimestampMs int64 // 0 = Now
+	Value       float64
+}
+
+// Proxy handlers
 type Proxy struct {
 	Opts Options
 }
@@ -21,7 +33,7 @@ func (p *Proxy) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`<html><body>
-	<h1>prom-scrape-proxy</h1>
+	<h1>metric-gate</h1>
 	<a href='/source'>/source</a> - original metrics from upstream<br/>
 	<a href='/analyze'>/analyze</a> - analyze upstream response for metrics and label cardinality<br/>
 	<a href='/metrics'>/metrics</a> - aggregated and filtered metrics from upstream<br/>
@@ -97,14 +109,10 @@ func (p *Proxy) get() (*http.Response, error) {
 func (p *Proxy) parse(r io.Reader) (Series, error) {
 	series := make(Series)
 	scanner := bufio.NewScanner(r)
+	lb := labels.NewBuilder(labels.EmptyLabels())
 	for scanner.Scan() {
 		line := scanner.Text()
-		// filter metrics
-		if p.Opts.FilterNames != nil && p.Opts.FilterNames.MatchString(line) {
-			continue
-		}
-
-		metricName, labels, value, err := parseLine(line)
+		metricName, lbls, value, err := parseLine(line)
 		if err != nil {
 			return nil, err
 		}
@@ -112,20 +120,26 @@ func (p *Proxy) parse(r io.Reader) (Series, error) {
 			continue
 		}
 
-		// aggregate labels
-		for l := range p.Opts.Labels {
-			delete(labels, l)
+		// metric_relabel_configs
+		lb.Reset(lbls)
+		lb.Set("__name__", metricName)
+		keep := relabel.ProcessBuilder(lb, p.Opts.Relabel...)
+		if !keep {
+			continue
 		}
+		lb.Del("__name__")
+		ls := labelsString(lb.Labels())
+
 		if series[metricName] == nil {
 			tmp := make(Seria)
-			tmp[labels.String()] = &value
+			tmp[ls] = &value
 			series[metricName] = &tmp
 		} else {
 			tmp := *series[metricName]
-			if tmp[labels.String()] == nil {
-				tmp[labels.String()] = &value
+			if tmp[ls] == nil {
+				tmp[ls] = &value
 			} else {
-				tmp[labels.String()].Value += value.Value
+				tmp[ls].Value += value.Value
 			}
 		}
 	}
@@ -137,8 +151,8 @@ func (p *Proxy) render(series Series, w io.Writer) error {
 		for labels, value := range *seria {
 			sb := strings.Builder{}
 			sb.WriteString(metricName)
-			if len(labels) > 0 {
-				sb.WriteString(fmt.Sprintf("{%s}", labels))
+			if len(labels) > 2 {
+				sb.WriteString(labels)
 			}
 			sb.WriteString(fmt.Sprintf(" %#v", value.Value))
 			if value.TimestampMs > 0 {

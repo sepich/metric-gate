@@ -1,48 +1,48 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/prometheus/model/labels"
 )
 
-// Labels is a map with proper prometheus stringer implementation
-type Labels map[string]string
+// more compact output for Labels.String()
+func labelsString(ls labels.Labels) string {
+	var bytea [1024]byte // On stack to avoid memory allocation while building the output.
+	b := bytes.NewBuffer(bytea[:0])
 
-func (l Labels) String() string {
-	var b strings.Builder
-	tmp := make([]string, 0, len(l))
-	for k := range l {
-		tmp = append(tmp, k)
-	}
-	sort.Strings(tmp)
-	for i, k := range tmp {
-		b.WriteString(fmt.Sprintf(`%s="%s"`, k, l[k]))
-		if i < len(tmp)-1 {
-			b.WriteString(",")
+	b.WriteByte('{')
+	first := true
+	for _, l := range ls {
+		if l.Value == "" {
+			continue
 		}
+		if !first {
+			b.WriteByte(',')
+		}
+		b.WriteString(l.Name)
+		b.WriteByte('=')
+		b.WriteByte('"')
+		b.WriteString(l.Value)
+		b.WriteByte('"')
+		first = false
 	}
+	b.WriteByte('}')
 	return b.String()
 }
 
-// Series is a simplified expfmt.TextToMetricFamilies for histogramm aggregation
-type Series map[string]*Seria // string = MetricName
-type Seria map[string]*SVal   // string = Labels.String()
-type SVal struct {
-	TimestampMs int64 // 0 = Now
-	Value       float64
-}
-
-// parseLine unpacks textformat, metricName is empty if line is a comment or blank
+// parseLine is a simplified expfmt.TextToMetricFamilies to unpack textformat, returns empty metricName if line is a comment or blank
 // https://prometheus.io/docs/instrumenting/exposition_formats/
-func parseLine(line string) (name string, labels Labels, value SVal, err error) {
+func parseLine(line string) (name string, lbls labels.Labels, value SVal, err error) {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") {
 		return "", nil, SVal{}, nil
 	}
 
-	labels = make(Labels)
+	lb := labels.NewBuilder(labels.EmptyLabels())
 	sVals := ""
 	sLabels := ""
 	i := strings.LastIndex(line, "}")
@@ -87,7 +87,7 @@ func parseLine(line string) (name string, labels Labels, value SVal, err error) 
 			if lName == "__name__" {
 				name = sLabels[1:i]
 			} else {
-				labels[lName] = sLabels[1:i]
+				lb.Set(lName, sLabels[1:i])
 			}
 
 			// trailing comma
@@ -123,5 +123,5 @@ func parseLine(line string) (name string, labels Labels, value SVal, err error) 
 		break // stop reading after timestamp
 	}
 
-	return name, labels, value, nil
+	return name, lb.Labels(), value, nil
 }

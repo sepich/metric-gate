@@ -1,10 +1,13 @@
 package main
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/grafana/regexp"
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/model/relabel"
 )
 
 func TestAgg(t *testing.T) {
@@ -40,10 +43,17 @@ func TestAgg(t *testing.T) {
 		},
 	}
 	proxy := NewProxy(&Options{
-		Labels: map[string]bool{
-			"code": true,
+		Relabel: []*relabel.Config{
+			{
+				Action: relabel.LabelDrop,
+				Regex:  relabel.Regexp{Regexp: regexp.MustCompile("code")},
+			},
+			{
+				Action:       relabel.Drop,
+				SourceLabels: model.LabelNames{"__name__"},
+				Regex:        relabel.Regexp{Regexp: regexp.MustCompile("metric4")},
+			},
 		},
-		FilterNames: regexp.MustCompile("metric4"),
 	})
 	for _, c := range cases {
 		data, err := proxy.parse(strings.NewReader(c.input))

@@ -6,6 +6,6 @@ COPY *.go Makefile .git ./
 RUN make build
 
 FROM gcr.io/distroless/static-debian11:nonroot
-COPY --from=builder /app/prom-scrape-proxy /prom-scrape-proxy
-ENTRYPOINT ["/prom-scrape-proxy"]
+COPY --from=builder /app/metric-gate /metric-gate
+ENTRYPOINT ["/metric-gate"]
 CMD ["--help"]
