@@ -27,11 +27,11 @@ Let's reduce cardinality 10x by removing `path` label from `ingress-nginx` metri
 
 ```ini
 # before
-nginx_ingress_controller_response_duration_seconds_bucket{ingress="ingress1", path="/api", ...} 5
-nginx_ingress_controller_response_duration_seconds_bucket{ingress="ingress1", path="/ui", ...} 2
+metric{ingress="test", path="/api", ...} 5
+metric{ingress="test", path="/ui", ...} 2
 
 # after
-nginx_ingress_controller_response_duration_seconds_bucket{ingress="ingress1", ...} 7
+metric{ingress="test", ...} 7
 ```
 That could be done via dropping the label from all the metrics:
 ```yaml
@@ -42,7 +42,7 @@ Or, you can target specific metrics by setting label to empty value:
 ```yaml
 - action: replace
   source_labels: [ingress, __name__]
-  regex: ingress1;nginx_ingress_controller_response_duration_seconds_bucket
+  regex: test;metric
   target_label: path
   replacement: "" # drops the label
 ```
@@ -79,7 +79,7 @@ Run it near your target, e.g. as a sidecar container. And set `-upstream` to cor
         - |
         -relabel=
             - action: labeldrop
-            regex: path
+              regex: path
     # ...
     ```        
 
@@ -114,4 +114,3 @@ Possibly use `vmserver` instead of `vmagent`, to scrape `/federate` endpoint ins
 - [otelcol](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/4968#issuecomment-2148753123) possible, but need to do relabel on prometheus side to have metrics with original names.
 - [grafana alloy](https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.processor.transform/) same as otelcol
 - [exporter_aggregator](https://github.com/tynany/exporter_aggregator) scape metrics from a list of Prometheus exporter endpoints and aggregate the values of any metrics with the same name and label/s
-
