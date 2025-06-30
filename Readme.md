@@ -47,6 +47,14 @@ Or, you can target specific metrics by setting label to empty value:
   replacement: "" # drops the label
 ```
 
+Usual filtering is also works.  
+Example of dropping all histograms except when `status="2xx"`:
+```yaml
+- action: drop
+  source_labels: [status, __name__]
+  regex: "[^2]xx;nginx_ingress_controller_.*_bucket"
+```
+
 ### Usage
 Available as a [docker image](https://hub.docker.com/r/sepa/metric-gate):
 ```
