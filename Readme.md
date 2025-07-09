@@ -58,34 +58,28 @@ Example of dropping all histograms except when `status="2xx"`:
 ### Usage
 Available as a [docker image](https://hub.docker.com/r/sepa/metric-gate):
 ```
-$ docker run sepa/metric-gate
-Usage of /metric-gate:
-  -file string
-        Analyze file for metrics and label cardinality and exit
-  -port int
-        Port to serve aggregated metrics on (default 8080)
-  -relabel string
-        metric_relabel_configs contents
-  -relabel-file string
-        metric_relabel_configs file path
-  -upstream string
-        Source URL to get metrics from (default "http://localhost:10254/metrics")
-  -version
-        Show version and exit
+$ docker run sepa/metric-gate -h
+Usage of ./metric-gate:
+  -f, --file string           Analyze file for metrics and label cardinality and exit
+  -p, --port int              Port to serve aggregated metrics on (default 8080)
+      --relabel string        metric_relabel_configs contents
+      --relabel-file string   metric_relabel_configs file path
+  -H, --upstream string       Source URL to get metrics from (default "http://localhost:10254/metrics")
+  -v, --version               Show version and exit
 ```
 Run it near your target, e.g. as a sidecar container. And set `-upstream` to correct port.  
 `metric_relabel_configs` could be provided via 2 methods:
-- via configMap and `-relabel-file` flag with full path to the file
-- via `-relabel` flag with yaml contents like so:
+- via configMap and `--relabel-file` flag with full path to the file
+- via `--relabel` flag with yaml contents like so:
     ```yaml
     # ... k8s pod spec
     containers:
     - name: metric-gate
-    image: sepa/metric-gate
-    args:
-        - -upstream=localhost:8081/metrics
+      image: sepa/metric-gate
+      args:
+        - --upstream=localhost:8081/metrics
         - |
-          -relabel=
+          --relabel=
             - action: labeldrop
               regex: path
     # ...

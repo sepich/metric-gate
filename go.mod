@@ -6,6 +6,7 @@ require (
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc
 	github.com/prometheus/common v0.64.0
 	github.com/prometheus/prometheus v0.304.2
+	github.com/spf13/pflag v1.0.5
 	gopkg.in/yaml.v2 v2.4.0
 )
 

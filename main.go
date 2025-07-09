@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/prometheus/common/version"
 	"github.com/prometheus/prometheus/model/relabel"
+	"github.com/spf13/pflag"
 	"gopkg.in/yaml.v2"
 )
 
@@ -21,31 +21,17 @@ type Options struct {
 	Port     int
 }
 
-// stringSliceFlag implements flag.Value
-type stringSliceFlag []string
-
-func (s *stringSliceFlag) String() string {
-	return fmt.Sprintf("%v", *s)
-}
-
-func (s *stringSliceFlag) Set(value string) error {
-	*s = append(*s, value)
-	return nil
-}
-
 func main() {
 	var opts Options
-	var ver bool
-	var re, reFile string
-	flag.StringVar(&opts.File, "file", "", "Analyze file for metrics and label cardinality and exit")
-	flag.StringVar(&opts.Upstream, "upstream", "http://localhost:10254/metrics", "Source URL to get metrics from")
-	flag.StringVar(&re, "relabel", "", "metric_relabel_configs contents")
-	flag.StringVar(&reFile, "relabel-file", "", "metric_relabel_configs file path")
-	flag.IntVar(&opts.Port, "port", 8080, "Port to serve aggregated metrics on")
-	flag.BoolVar(&ver, "version", false, "Show version and exit")
-	flag.Parse()
+	pflag.StringVarP(&opts.File, "file", "f", "", "Analyze file for metrics and label cardinality and exit")
+	pflag.StringVarP(&opts.Upstream, "upstream", "H", "http://localhost:10254/metrics", "Source URL to get metrics from")
+	var re = pflag.StringP("relabel", "", "", "metric_relabel_configs contents")
+	var reFile = pflag.StringP("relabel-file", "", "", "metric_relabel_configs file path")
+	pflag.IntVarP(&opts.Port, "port", "p", 8080, "Port to serve aggregated metrics on")
+	var ver = pflag.BoolP("version", "v", false, "Show version and exit")
+	pflag.Parse()
 
-	if ver {
+	if *ver {
 		fmt.Println(version.Print("metric-gate"))
 		os.Exit(0)
 	}
@@ -58,20 +44,20 @@ func main() {
 	if !strings.Contains(opts.Upstream, "://") {
 		opts.Upstream = "http://" + opts.Upstream
 	}
-	if re != "" && reFile != "" {
+	if *re != "" && *reFile != "" {
 		fmt.Println("Error: both `relabel` and `relabel-file` specified")
 		os.Exit(1)
 	}
-	if reFile != "" {
-		data, err := os.ReadFile(reFile)
+	if *reFile != "" {
+		data, err := os.ReadFile(*reFile)
 		if err != nil {
 			fmt.Println("Error reading relabel-file:", err)
 			os.Exit(1)
 		}
 		yaml.Unmarshal(data, &opts.Relabel)
 	}
-	if re != "" {
-		yaml.Unmarshal([]byte(re), &opts.Relabel)
+	if *re != "" {
+		yaml.Unmarshal([]byte(*re), &opts.Relabel)
 	}
 
 	proxy := NewProxy(&opts)

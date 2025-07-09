@@ -8,4 +8,3 @@ RUN make build
 FROM gcr.io/distroless/static-debian11:nonroot
 COPY --from=builder /app/metric-gate /metric-gate
 ENTRYPOINT ["/metric-gate"]
-CMD ["--help"]
