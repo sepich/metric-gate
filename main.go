@@ -54,10 +54,18 @@ func main() {
 			fmt.Println("Error reading relabel-file:", err)
 			os.Exit(1)
 		}
-		yaml.Unmarshal(data, &opts.Relabel)
+		err = yaml.Unmarshal(data, &opts.Relabel)
+		if err != nil {
+			fmt.Println("Error parsing relabel-file:", err)
+			os.Exit(1)
+		}
 	}
 	if *re != "" {
-		yaml.Unmarshal([]byte(*re), &opts.Relabel)
+		err := yaml.Unmarshal([]byte(*re), &opts.Relabel)
+		if err != nil {
+			fmt.Println("Error parsing relabel:", err)
+			os.Exit(1)
+		}
 	}
 
 	proxy := NewProxy(&opts)
@@ -65,7 +73,7 @@ func main() {
 	http.HandleFunc("/source", proxy.src)
 	http.HandleFunc("/analyze", proxy.analyze)
 	http.HandleFunc("/metrics", proxy.agg)
-	fmt.Printf("Starting server on port %d\n", opts.Port)
+	fmt.Printf("Starting server, port=%d, version=%s\n", opts.Port, version.Version)
 	if err := http.ListenAndServe(fmt.Sprintf(":%d", opts.Port), nil); err != nil {
 		fmt.Printf("Error starting server: %s\n", err)
 		os.Exit(1)
