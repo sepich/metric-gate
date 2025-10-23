@@ -12,12 +12,15 @@ build: test ## Build binaries with version set
 	-X github.com/prometheus/common/version.BuildUser=${USER}@`hostname` \
 	-X github.com/prometheus/common/version.BuildDate=`date +%Y/%m/%d-%H:%M:%SZ`"
 
+bench: ## Run benchmarks
+	@go test -bench . -benchmem
+
 docker: ## Build docker image
 	@docker build --platform linux/amd64 -t metric-gate .
 
 push: ## Push docker image
-	docker tag metric-gate sepa/metric-gate
-	docker push sepa/metric-gate
+	docker tag metric-gate sepa/metric-gate:test
+	docker push sepa/metric-gate:test
 
 test: ## Run tests
 	@go test

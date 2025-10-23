@@ -1,6 +1,6 @@
 module github.com/sepich/metric-gate
 
-go 1.23.5
+go 1.24.0
 
 require (
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc
