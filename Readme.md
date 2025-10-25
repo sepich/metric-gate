@@ -11,9 +11,9 @@ end
 - Aggregation is done via `labeldrop` leading to `sum() without(label)` like result. Note, that it works for Counters and Histograms, but has no sense for Gauges.
 
 Could be used in three modes:
-- [sidecar](), as a container in the same pod with a single target (as above)
-- [dns](), returns aggregated result of multiple targets
-- [subset](), separate endpoints for customized subsets of metrics
+- [sidecar](#sidecar-mode), as a container in the same pod with a single target (as above)
+- [dns](#dns-mode), returns aggregated result of multiple targets
+- [subset](#subset-mode), subset metrics to separate endpoints
 
 ### Why?
 Consider the following example:
@@ -24,7 +24,7 @@ Cardinality: 1000 ingresses * 6 histogram * 12 buckets * 10 path = 720k metrics
 
 The resulting size of http response on `/metrics` endpoint is 276Mb. Which is being pulled by Prometheus every scrape_interval (default 15s) leading to constant ~40Mbit/s traffic (compressed) on each replica of ingress-nginx Pod.
 
-Sure, metrics could be filtered at Prometheus side in `metric_relabel_configs`, but it will not reduce the amount of data being pulled from target. And then aggregation could be done via `recording rules`, but one cannot drop already ingested data.
+Sure, metrics could be filtered at Prometheus side in `metric_relabel_configs`, but it will not reduce the amount of data being pulled from target. And then aggregation could be done via `recording rules`, but one cannot drop already ingested source data afterward.
 
 ### sidecar mode
 In this case, `metric-gate` could be used as a sidecar container, which would get original metrics via fast `localhost` connection, apply filtering and aggregation, and then return smaller response to Prometheus.
@@ -41,21 +41,24 @@ metric{ingress="test", ...} 7
 ```
 That could be done via dropping the label from all the metrics:
 ```yaml
+metric_relabel_configs:
 - action: labeldrop
   regex: path
 ```
 Or, you can target specific metrics by setting label to empty value:
 ```yaml
+metric_relabel_configs:
 - action: replace
   source_labels: [ingress, __name__]
   regex: test;metric
   target_label: path
-  replacement: "" # drops the label
+  replacement: "" # drops the `path` label
 ```
 
 Usual filtering is also works.  
 Example of dropping all histograms except when `status="2xx"`:
 ```yaml
+metric_relabel_configs:
 - action: drop
   source_labels: [status, __name__]
   regex: "[^2]xx;nginx_ingress_controller_.*_bucket"
@@ -86,7 +89,7 @@ spec:
   publishNotReadyAddresses: true # try to collect metrics from non-Ready Pods too
 ```
 
-When request comes to `/metrics` endpoint of `metric-gate`, it (re)resolves `--upstream` dns to set of IPs and fan out to all of them at the same time. Timeout of those subrequests is configurable via `--scrape-timeout` flag (default 12s).
+When request comes to `/metrics` endpoint of `metric-gate`, it (re)resolves `--upstream` dns to a set of IPs and fan out to all of them at the same time, so the result is returned with the speed of the slowest target. Timeout of those subrequests is configurable via `--scrape-timeout` flag. With it, you can choose to fail the whole scrape if one of the targets is slow (`--scrape-timeout` > prometheus `scrape_timeout`) , or return partial response with only metrics from the ones that are available in time.
 
 Continuing with our example above, this way you can reduce cardinality to the number of `ingress-nginx-controller` replicas.
 To do that, disable direct scrape of each replica Pod by Prometheus, and scrape only `metric-gate` instead.  
@@ -94,6 +97,16 @@ Problems with this approach:
 - In this mode `/source` endpoint returns single random upstream IP output.
 - There is "automatic availability monitoring" based on [up](https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series) metric in Prometheus, which can detect when specific Target is down. In this case it only provides status of `metric-gate` itself, not the each `ingress-nginx-controller` replica.
 - All the metrics are aggregated from all the replicas, so information like `process_start_time_seconds` which only makes sense for single replica is not available anymore.
+- "Counter resets" detection is broken in the case of aggregation. Consider this example:
+
+  |                     | t1  | t2     | t3  |
+  |---------------------| --- |--------| --- |
+  | `metric{instance="a"}` | 10  | 10     | 10  |
+  | `metric{instance="b"}` | 20  | 0      | 0   |
+  | `sum(rate(metric))` | 0   | 0      | 0   |
+  | `metric` aggregated | 30  | 10     | 10  |
+  | `rate(metric)`      | 0   | 10/15s | 0   |
+  There are two pods (`a` and `b`) serving `metric` counter. At point in time `t2` we restart pod `b`. This works fine in prometheus, see [Rate then sum](https://www.robustperception.io/rate-then-sum-never-sum-then-rate/), as first `rate` is calculated and it sees drop of counter to 0. This leads to correct 0 result. Now we aggregate those two metrics into one (dropping `instance` label), and at point in time `t2` the value is 10. For `rate` that means that Counter reset happened (value of Counter is less than previous one) and now the value is 10, which reads as "in a scrape interval (15s) it dropped to 0 and then increased to 10", so `rate=10/15s=0.67/s` which is incorrect.
 
 Some of these issues could be solved by `subset` mode, read below.
 
@@ -132,11 +145,10 @@ Let's take a look at the `metric-gate-a` configuration in this case:
         - --port=8079
         - |
           --relabel=
+            metric_relabel_configs:
             - action: keep # drop Request metrics
               source_labels: [__name__]
               regex: (go|nginx_ingress_controller_nginx_process|process)_.*
-        - |
-          --subsets=
             requests:
             - action: drop # keep only Request metrics
               source_labels: [__name__]
@@ -145,32 +157,32 @@ Let's take a look at the `metric-gate-a` configuration in this case:
               regex: path # aggregate path
 ```
 This way Prometheus scrapes usual `/metrics` endpoint, which is configured by `--relabel`, and has only per-process metrics.
-While answering to this request, `metric-gate` uses the same upstream response to fill out all the configured `--subsets`.
+While answering to this request, `metric-gate` uses the same upstream response to fill out all the configured `subsets`.
 In this case only one `subset` named "requests" is configured, which results then could be accessed at `/metrics/requests` endpoint.
 Now downstream aggregating `metric-gate` could use it to get only `Request metrics` from each replica.
 
 Note that data on `/metrics/requests` is available immediately, and accessing it does not generate new subrequest to the upstream. That is done to reduce both cpu/network load to upstream. But it also means, the data could be stale (it only refreshes on `/metrics` scrapes). To prevent time skew on graphs, `timestamp` of upstream request is added to all the metrics returned by `subset` endpoints (if they don't have it yet)
 
-The diagram above is just one of the examples. We can drop `metric-gate` sidecars, and scrape metrics from Targets directly by Prometheus and aggregating `metric-gate` (each filtering own subset of metrics in `metric_relabel_configs`). That would lead to two scrapes  per-scrape-interval, and twice as much cpu/network load on each replica just from a metrics collection. Sidecars are shown here to demonstrate that we can aggregate pre-filtered results, while having single scrape for Targets.
+The diagram above is just one of the examples. We can drop `metric-gate` sidecars, and scrape metrics from Targets directly by Prometheus and aggregating `metric-gate` (each filtering own subset of metrics in `metric_relabel_configs`). That would lead to two scrapes per-scrape-interval, and twice as much cpu/network load on each replica just from a metrics collection. Sidecars are shown here to demonstrate that we can aggregate pre-filtered results, while having a single scrape for Targets.
 
 ### Usage
 Available as a [docker image](https://hub.docker.com/r/sepa/metric-gate):
 ```
 $ docker run sepa/metric-gate -h
-Usage of ./metric-gate:
-  -f, --file string           Analyze file for metrics and label cardinality and exit
-  -p, --port int              Port to serve aggregated metrics on (default 8080)
-      --relabel string        metric_relabel_configs contents
-      --relabel-file string   metric_relabel_configs file path
-      --subsets
-  -H, --upstream string       Source URL to get metrics from (default "http://localhost:10254/metrics")
-      --scrape-timeout
-  -v, --version               Show version and exit
+Usage of /metric-gate:
+  -f, --file string               Analyze file for metrics and label cardinality and exit
+      --log-level string          Log level (info, debug) (default "info")
+  -p, --port int                  Port to serve aggregated metrics on (default 8080)
+      --relabel string            Contents of yaml file with metric_relabel_configs
+      --relabel-file string       Path to yaml file with metric_relabel_configs (mutually exclusive)
+  -t, --scrape-timeout duration   Timeout for upstream requests (default 15s)
+  -H, --upstream string           Source URL to get metrics from. The scheme may be prefixed with 'dns+' to resolve and aggregate multiple targets (default "http://localhost:10254/metrics")
+  -v, --version                   Show version and exit
 ```
 Run it near your target, and set `--upstream` to correct port.  
 
 [metric_relabel_configs](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#relabel_config) could be provided via 2 methods:
-- via configMap and `--relabel-file` flag with full path to the file
+- via configMap and `--relabel-file` flag with a full path to the file
 - via `--relabel` flag with yaml contents like so:
     ```yaml
     # ... k8s pod spec
@@ -181,14 +193,15 @@ Run it near your target, and set `--upstream` to correct port.
         - --upstream=localhost:8081/metrics
         - |
           --relabel=
+            metric_relabel_configs:
             - action: labeldrop
               regex: path
     # ...
     ```
-The same applies to `--subsets` flag, but it should be a `map[string][]relabel_config` with `subset` name as a key. This key name then used to access filtered metrics via `/metrics/<name>` endpoint.
+Any additional keys (to `metric_relabel_configs`) defined in `--relabel=` would be used as a name to access its filtered metrics via `/metrics/<name>` endpoint.
 
 Available endpoints:
-![](https://habrastorage.org/webt/5r/ev/v0/5revv0vjiqxwbqmn9yskosnpktm.png)
+![](https://habrastorage.org/webt/yb/xj/oq/ybxjoqnyodhcbpwgly5n8jqyurw.png)
 
 To find metrics to aggregate, you can use `/analyze` endpoint:
 ```
@@ -214,7 +227,7 @@ docker run --rm -v /path/to/metrics.txt:/metrics.txt sepa/metric-gate --file=/me
 - [vmagent](https://docs.victoriametrics.com/victoriametrics/stream-aggregation/) can do aggregation to new metric names and then send remote-write to Prometheus.  
 How to relabel metrics to the original form?
 Possibly use `vmserver` instead of `vmagent`, to scrape `/federate` endpoint instead of remote-write, to allow for relabeling in scrape config on prometheus side
-- [vector.dev](https://vector.dev/docs/reference/configuration/transforms/aggregate/) cannot aggregate metrics like `sum() without(label)`, only filtering
 - [otelcol](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/4968#issuecomment-2148753123) possible, but needs relabeling on the prometheus side to have metrics with original names
 - [grafana alloy](https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.processor.transform/) same as otelcol
-- [exporter_aggregator](https://github.com/tynany/exporter_aggregator) scape metrics from a list of Prometheus exporter endpoints and aggregate the values of any metrics with the same name and label/s. Same as `dns` mode, but with static list of upstreams.
+- [exporter_aggregator](https://github.com/tynany/exporter_aggregator) scape metrics from a list of Prometheus exporter endpoints and aggregate the values of any metrics with the same name and label/s. Same as `dns` mode, but with static list of upstreams
+- [telegraf](https://docs.influxdata.com/telegraf/v1/aggregator-plugins/merge/) and [vector](https://vector.dev/docs/reference/configuration/transforms/aggregate/#aggregation-behavior) cannot aggregate metrics like `sum() without(label)`, it is more like downsampling

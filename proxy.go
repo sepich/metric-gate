@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/relabel"
@@ -50,23 +51,31 @@ func (s *Series) Add(metricName string, ls string, value SVal) {
 
 // Proxy handlers
 type Proxy struct {
-	Opts   Options
-	logger *slog.Logger
+	Opts    Options
+	logger  *slog.Logger
+	subsets map[string]*Series
+	tsMs    int64
 }
 
 func NewProxy(opts *Options, logger *slog.Logger) *Proxy {
-	return &Proxy{Opts: *opts, logger: logger}
+	return &Proxy{Opts: *opts, logger: logger, subsets: make(map[string]*Series)}
 }
 
 // index returns help message
 func (p *Proxy) index(w http.ResponseWriter, r *http.Request) {
+	subsets := ""
+	for s := range p.Opts.Relabel {
+		if s != default_subset {
+			subsets += fmt.Sprintf("\n<a href='/metrics/%s'>/metrics/%s</a> - aggregated and filtered metrics for subset '%s'<br/>", s, s, s)
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`<html><body>
 	<h1>metric-gate</h1>
 	<a href='/source'>/source</a> - original metrics from upstream<br/>
 	<a href='/analyze'>/analyze</a> - analyze upstream response for metrics and label cardinality<br/>
-	<a href='/metrics'>/metrics</a> - aggregated and filtered metrics from upstream<br/>
+	<a href='/metrics'>/metrics</a> - aggregated and filtered metrics from upstream<br/>` + subsets + `
 	<a href='/debug/pprof/'>/debug/pprof/</a> - pprof debug endpoints
 	</body></html>`))
 }
@@ -110,9 +119,26 @@ func (p *Proxy) analyze(w http.ResponseWriter, r *http.Request) {
 
 // agg returns aggregated filtered metrics
 func (p *Proxy) agg(w http.ResponseWriter, r *http.Request) {
-	series := NewSeries()
-	hosts := []string{p.Opts.Upstream}
+	start := time.Now()
+	subset := r.PathValue("subset")
+	if subset != "" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if p.subsets[subset] == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte("No metrics had been requested by /metrics yet or no such subset defined in relabel config"))
+		} else {
+			w.WriteHeader(http.StatusOK)
+			render(p.subsets[subset], p.tsMs, w)
+		}
+		p.logger.Debug("Render subset metrics done", "took", time.Since(start))
+		return
+	}
 
+	// reset subsets data
+	for s := range p.Opts.Relabel {
+		p.subsets[s] = NewSeries()
+	}
+	hosts := []string{p.Opts.Upstream}
 	if p.Opts.Resolve != nil {
 		ips, err := net.LookupIP(p.Opts.Resolve.Hostname())
 		if err != nil {
@@ -129,55 +155,72 @@ func (p *Proxy) agg(w http.ResponseWriter, r *http.Request) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(hosts))
+	errCh := make(chan error, len(hosts))
 	for _, h := range hosts {
 		go func(host string) {
 			defer wg.Done()
-			u := host
-			if p.Opts.Resolve != nil {
-				t := url.URL{
-					Scheme:   p.Opts.Resolve.Scheme,
-					Host:     host + ":" + p.Opts.Resolve.Port(),
-					Path:     p.Opts.Resolve.Path,
-					RawQuery: p.Opts.Resolve.RawQuery,
-				}
-				u = t.String()
-			}
-			ctx, cancel := context.WithTimeout(r.Context(), p.Opts.Timeout)
-			defer cancel()
-
-			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-			if err != nil {
-				p.logger.Error("Error creating request", "host", host, "err", err)
-				return
-			}
-			if p.Opts.Resolve != nil {
-				req.Host = p.Opts.Resolve.Hostname() // preserve the original Host header
-			}
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				p.logger.Error("Request failed", "host", host, "err", err)
-				return
-			}
-			defer resp.Body.Close()
-
-			err = p.parse(resp.Body, series)
-			if err != nil {
-				p.logger.Error("Error parsing response", "host", host, "err", err)
-				return
-			}
+			p.scrape(host, errCh)
 		}(h)
 	}
 	wg.Wait()
+	close(errCh)
+	p.logger.Debug("Upstream requests done", "took", time.Since(start), "upstreams", len(hosts), "down", len(errCh))
 
-	// only fail if all wg failed?
-	if len(series.data) == 0 {
-		http.Error(w, "Error getting any metrics from upstream", http.StatusInternalServerError)
+	if len(errCh) == len(hosts) {
+		s := "Error getting any metrics from upstream:"
+		for e := range errCh {
+			s += "\n" + e.Error()
+		}
+		http.Error(w, s, http.StatusInternalServerError)
 		return
 	}
+	p.tsMs = time.Now().UnixMilli()
+	start = time.Now()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	render(series, w)
+	render(p.subsets[default_subset], 0, w)
+	p.logger.Debug("Render metrics done", "took", time.Since(start))
+}
+
+// scrape fetches metrics from `host` to p.subsets
+func (p *Proxy) scrape(host string, errCh chan error) {
+	u := host
+	if p.Opts.Resolve != nil {
+		t := url.URL{
+			Scheme:   p.Opts.Resolve.Scheme,
+			Host:     host + ":" + p.Opts.Resolve.Port(),
+			Path:     p.Opts.Resolve.Path,
+			RawQuery: p.Opts.Resolve.RawQuery,
+		}
+		u = t.String()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), p.Opts.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		p.logger.Error("Error creating request", "host", host, "err", err)
+		errCh <- err
+		return
+	}
+	if p.Opts.Resolve != nil {
+		req.Host = p.Opts.Resolve.Hostname() // preserve the original Host header
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		p.logger.Error("Request failed", "host", host, "err", err)
+		errCh <- err
+		return
+	}
+	defer resp.Body.Close()
+
+	err = p.parse(resp.Body, p.subsets)
+	if err != nil {
+		p.logger.Error("Error parsing response", "host", host, "err", err)
+		errCh <- err
+		return
+	}
 }
 
 func get(url string) (*http.Response, error) {
@@ -189,7 +232,7 @@ func get(url string) (*http.Response, error) {
 }
 
 // parse unpacks and filters textformat
-func (p *Proxy) parse(r io.Reader, series *Series) error {
+func (p *Proxy) parse(r io.Reader, series map[string]*Series) error {
 	scanner := bufio.NewScanner(r)
 	lb := labels.NewBuilder(labels.EmptyLabels())
 	for scanner.Scan() {
@@ -203,20 +246,22 @@ func (p *Proxy) parse(r io.Reader, series *Series) error {
 		}
 
 		// metric_relabel_configs
-		lb.Reset(lbls)
-		lb.Set("__name__", metricName)
-		keep := relabel.ProcessBuilder(lb, p.Opts.Relabel...)
-		if !keep {
-			continue
+		for subset, mrc := range p.Opts.Relabel {
+			lb.Reset(lbls)
+			lb.Set("__name__", metricName)
+			keep := relabel.ProcessBuilder(lb, mrc...)
+			if !keep {
+				continue
+			}
+			lb.Del("__name__")
+			ls := labelsString(lb.Labels())
+			series[subset].Add(metricName, ls, value)
 		}
-		lb.Del("__name__")
-		ls := labelsString(lb.Labels())
-		series.Add(metricName, ls, value)
 	}
 	return nil
 }
 
-func render(series *Series, w io.Writer) {
+func render(series *Series, tsMs int64, w io.Writer) {
 	for metricName, seria := range series.data {
 		for labels, value := range *seria {
 			w.Write([]byte(metricName))
@@ -226,6 +271,8 @@ func render(series *Series, w io.Writer) {
 			w.Write([]byte(fmt.Sprintf(" %#v", value.Value)))
 			if value.TimestampMs > 0 {
 				w.Write([]byte(fmt.Sprintf(" %d", value.TimestampMs)))
+			} else if tsMs > 0 {
+				w.Write([]byte(fmt.Sprintf(" %d", tsMs)))
 			}
 			w.Write([]byte("\n"))
 		}
