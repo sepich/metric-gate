@@ -223,6 +223,32 @@ You can also run it as a cli-tool to analyze a file with metrics:
 docker run --rm -v /path/to/metrics.txt:/metrics.txt sepa/metric-gate --file=/metrics.txt
 ```
 
+### Note about parsing
+From performance perspective, `metric-gate` hot path is parsing prometheus text format, do relabel, and then render it back to text format. 
+`Relabel` and `rendering` implementations from prometheus libs look fine, but `parsing` seems as something that could be improved. 
+Here is a go bench for different parsing implementations:
+```
+$ make bench
+goos: darwin
+goarch: arm64
+pkg: github.com/sepich/metric-gate
+BenchmarkParseLine0-16      232239      5100 ns/op      9184 B/op     110 allocs/op
+BenchmarkParseLine1-16      983380      1246 ns/op      3120 B/op      11 allocs/op
+BenchmarkParseLine-16      2222438       539.5 ns/op    1456 B/op       8 allocs/op
+BenchmarkParseLine2-16     2635765       458.3 ns/op    1408 B/op       6 allocs/op
+BenchmarkParseLine3-16     1817930       659.9 ns/op    1832 B/op      26 allocs/op
+BenchmarkParseLine4-16     2623164       453.5 ns/op    1408 B/op       6 allocs/op
+```
+where:
+- ParseLine0 uses prometheus `expfmt.TextToMetricFamilies`
+- ParseLine1 uses prometheus `textparse.PromParser`
+- ParseLine previous custom implementation
+- ParseLine2 AI improved version of it for speed (to the state of being unreadable)
+- ParseLine3 attempt to use raw `[]byte` instead of `string` to skip utf8, but `Label` conversion to `string` is more expensive
+- ParseLine4 attempt to use state-machine with only pointers to a slice (used now)
+
+So the custom implementation is >2x faster than using prometheus lib. And actual algorithm does not matter much, the number of mem allocations per line is more important.
+
 ### Alternatives
 - [vmagent](https://docs.victoriametrics.com/victoriametrics/stream-aggregation/) can do aggregation to new metric names and then send remote-write to Prometheus.  
 How to relabel metrics to the original form?

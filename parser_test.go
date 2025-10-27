@@ -13,6 +13,27 @@ func TestParseLine(t *testing.T) {
 		err    error
 	}{
 		{
+			line:   ``,
+			name:   "",
+			labels: "{}",
+			value:  SVal{},
+			err:    nil,
+		},
+		{
+			line:   `# helptext`,
+			name:   "",
+			labels: "{}",
+			value:  SVal{},
+			err:    nil,
+		},
+		{
+			line:   ` 	# helptext`,
+			name:   "",
+			labels: "{}",
+			value:  SVal{},
+			err:    nil,
+		},
+		{
 			line:   `metric1 10`,
 			name:   "metric1",
 			labels: "{}",
@@ -27,7 +48,7 @@ func TestParseLine(t *testing.T) {
 			err:    nil,
 		},
 		{
-			line:   ` metric3  10 `,
+			line:   `metric3  10 `,
 			name:   "metric3",
 			labels: "{}",
 			value:  SVal{Value: 10, TimestampMs: 0},
@@ -53,7 +74,8 @@ func TestParseLine(t *testing.T) {
 			labels: `{code="200",method="GET"}`,
 			value:  SVal{Value: 10, TimestampMs: 1751041454000},
 			err:    nil,
-		}, {
+		},
+		{
 			line:   `metric7{b="b", a="a,b,c" ,d="a=b", C="{\nA\"B"} 10`,
 			name:   "metric7",
 			labels: `{C="{\nA\"B",a="a,b,c",b="b",d="a=b"}`,
@@ -78,17 +100,25 @@ func TestParseLine(t *testing.T) {
 
 	for _, c := range cases {
 		name, labels, value, err := parseLine(c.line)
+		if err != c.err {
+			t.Errorf("expected error %v, got %v", c.err, err)
+		}
 		if name != c.name {
 			t.Errorf("expected name %s, got %s", c.name, name)
 		}
 		if labelsString(labels) != c.labels {
-			t.Errorf("expected labels %v, got %v", c.labels, labels)
+			t.Errorf("(%s) expected labels %v, got %v", c.name, c.labels, labelsString(labels))
 		}
 		if value != c.value {
 			t.Errorf("expected value %v, got %v", c.value, value)
 		}
-		if err != c.err {
-			t.Errorf("expected error %v, got %v", c.err, err)
-		}
+
+	}
+}
+
+func BenchmarkParseLine(b *testing.B) {
+	s := `nginx_ingress_controller_request_duration_seconds_sum{canary="",controller_class="k8s.io/nginx-test",controller_namespace="ingress-nginx",controller_pod="ingress-nginx-controller-test-769b6d4b8c-kfh2r",ingress="helm-testing-t-7a97764ipl-test-services-helm-essential",method="GET",namespace="testing-t-7a97764ipl",path="/actuator/health",service="helm-testing-t-7a97764ipl-test-services-helm",status="2xx"} 151.3409999999997`
+	for b.Loop() {
+		parseLine(s)
 	}
 }

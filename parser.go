@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/prometheus/prometheus/model/labels"
 )
@@ -37,90 +36,109 @@ func labelsString(ls labels.Labels) string {
 // parseLine is a simplified expfmt.TextToMetricFamilies to unpack textformat, returns empty metricName if line is a comment or blank
 // https://prometheus.io/docs/instrumenting/exposition_formats/
 func parseLine(line string) (name string, lbls labels.Labels, value SVal, err error) {
-	line = strings.TrimSpace(line)
-	if line == "" || strings.HasPrefix(line, "#") {
+	i := 0
+	for ; i < len(line) && (line[i] == ' ' || line[i] == '\t'); i++ { // not needed
+	}
+	if len(line) == 0 || line[i] == '#' {
 		return "", nil, SVal{}, nil
 	}
 
 	lb := labels.NewBuilder(labels.EmptyLabels())
-	sVals := ""
-	sLabels := ""
-	i := strings.LastIndex(line, "}")
-	if i == -1 {
-		name, sVals, _ = strings.Cut(line, " ")
-	} else {
-		tmp := strings.SplitN(line, "{", 2)
-		if len(tmp) != 2 {
-			return "", nil, SVal{}, fmt.Errorf("invalid line: %s", line)
-		}
-		name = strings.TrimSpace(tmp[0])
-		sVals = strings.TrimSpace(tmp[1][i-len(tmp[0]):])
-		sLabels = strings.TrimSpace(tmp[1][:i-len(tmp[0])-1])
-
-		for {
-			if len(sLabels) == 0 {
+	j := i
+	for j < len(line) {
+		if line[j] == ' ' || line[j] == '{' {
+			name = line[i:j]
+			for ; j < len(line) && line[j] == ' '; j++ {
+			}
+			if line[j] != '{' {
+				i = j
 				break
 			}
-			// label name
-			i := strings.Index(sLabels, "=")
-			if i == -1 || i >= len(sLabels)-2 {
-				return "", nil, SVal{}, fmt.Errorf("invalid labelName: %s", line)
-			}
-			lName := strings.TrimSpace(sLabels[:i])
-
-			// quoted value
-			sLabels = strings.TrimSpace(sLabels[i+1:])
-			if sLabels[0] != '"' {
-				return "", nil, SVal{}, fmt.Errorf("invalid labelValue: %s", line)
-			}
-			found := false
-			for j := 1; j < len(sLabels); j++ {
-				if sLabels[j] == '"' && sLabels[j-1] != '\\' {
-					i = j
-					found = true
+			// labels
+			i = j + 1
+			lname, lvalue := "", ""
+			for {
+				for ; i < len(line) && line[i] == ' '; i++ {
+				}
+				if line[i] == '}' {
+					i++
+					for ; i < len(line) && line[i] == ' '; i++ {
+					}
 					break
 				}
-			}
-			if !found {
-				return "", nil, SVal{}, fmt.Errorf("invalid labelValue: %s", line)
-			}
-			if lName == "__name__" {
-				name = sLabels[1:i]
-			} else {
-				lb.Set(lName, sLabels[1:i])
-			}
+				// labelname
+				j = i + 1
+				for ; j < len(line); j++ {
+					if line[j] == '}' {
+						return "", nil, SVal{}, fmt.Errorf("invalid labelName}: %s", line)
+					}
+					if line[j] == ' ' || line[j] == '=' {
+						lname = line[i:j]
+						for ; j < len(line) && line[j] == ' '; j++ {
+						}
+						if line[j] == '=' {
+							i = j + 1
+							break
+						}
+						return "", nil, SVal{}, fmt.Errorf("invalid labelName=: %s", line)
+					}
+				}
+				for ; i < len(line) && line[i] == ' '; i++ {
+				}
 
-			// trailing comma
-			if i == len(sLabels)-1 {
-				break
+				// labelvalue
+				if line[i] != '"' {
+					return "", nil, SVal{}, fmt.Errorf("invalid labelValue: %s", line)
+				}
+				i++
+				j = i
+				for ; j < len(line); j++ {
+					if line[j] == '"' && line[j-1] != '\\' {
+						lvalue = line[i:j]
+						i = j + 1
+						break
+					}
+				}
+				if lname == "__name__" {
+					name = lvalue
+				} else {
+					lb.Set(lname, lvalue)
+				}
+
+				for ; i < len(line) && line[i] == ' '; i++ {
+				}
+				if line[i] == ',' {
+					i++
+				}
 			}
-			sLabels = strings.TrimSpace(sLabels[i+1:])
-			if len(sLabels) > 0 && sLabels[0] != ',' {
-				return "", nil, SVal{}, fmt.Errorf("invalid labelDelim: %s", line)
-			}
-			sLabels = strings.TrimSpace(sLabels[1:])
+			break
 		}
+		j++
 	}
 
-	// value and timestamp
-	found := false
-	for _, tmp := range strings.Split(strings.TrimSpace(sVals), " ") {
-		if tmp == "" {
-			continue
-		}
-		if !found {
-			value.Value, err = strconv.ParseFloat(tmp, 64)
-			if err != nil {
-				return "", nil, SVal{}, fmt.Errorf("invalid value: %s", line)
-			}
-			found = true
-			continue
-		}
-		value.TimestampMs, err = strconv.ParseInt(tmp, 10, 64)
+	// value
+	j = i + 1
+	for ; j < len(line) && line[j] != ' '; j++ {
+	}
+	if i >= len(line) {
+		return "", nil, SVal{}, fmt.Errorf("invalid line, no value: %s", line)
+	}
+	value.Value, err = strconv.ParseFloat(line[i:j], 64)
+	if err != nil {
+		return "", nil, SVal{}, fmt.Errorf("invalid value %s: %s", line[i:j], line)
+	}
+	// ts
+	i = j + 1
+	for ; i < len(line) && line[i] == ' '; i++ {
+	}
+	j = i + 1
+	for ; j < len(line) && line[j] != ' '; j++ {
+	}
+	if i < len(line) {
+		value.TimestampMs, err = strconv.ParseInt(line[i:j], 10, 64)
 		if err != nil {
-			return "", nil, SVal{}, fmt.Errorf("invalid TS: %s", line)
+			return "", nil, SVal{}, fmt.Errorf("invalid timestamp: %s", line)
 		}
-		break // stop reading after timestamp
 	}
 
 	return name, lb.Labels(), value, nil

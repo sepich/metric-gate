@@ -135,9 +135,16 @@ func (p *Proxy) agg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// reset subsets data
+	subsets := make(map[string]*Series)
 	for s := range p.Opts.Relabel {
-		p.subsets[s] = NewSeries()
+		subsets[s] = NewSeries()
 	}
+	defer func() {
+		for s := range p.Opts.Relabel {
+			p.subsets[s] = subsets[s]
+		}
+	}()
+
 	hosts := []string{p.Opts.Upstream}
 	if p.Opts.Resolve != nil {
 		ips, err := net.LookupIP(p.Opts.Resolve.Hostname())
@@ -159,7 +166,7 @@ func (p *Proxy) agg(w http.ResponseWriter, r *http.Request) {
 	for _, h := range hosts {
 		go func(host string) {
 			defer wg.Done()
-			p.scrape(host, errCh)
+			p.scrape(host, subsets, errCh)
 		}(h)
 	}
 	wg.Wait()
@@ -178,12 +185,12 @@ func (p *Proxy) agg(w http.ResponseWriter, r *http.Request) {
 	start = time.Now()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	render(p.subsets[default_subset], 0, w)
+	render(subsets[default_subset], 0, w)
 	p.logger.Debug("Render metrics done", "took", time.Since(start))
 }
 
-// scrape fetches metrics from `host` to p.subsets
-func (p *Proxy) scrape(host string, errCh chan error) {
+// scrape fetches metrics from `host` to subsets
+func (p *Proxy) scrape(host string, subsets map[string]*Series, errCh chan error) {
 	u := host
 	if p.Opts.Resolve != nil {
 		t := url.URL{
@@ -215,7 +222,7 @@ func (p *Proxy) scrape(host string, errCh chan error) {
 	}
 	defer resp.Body.Close()
 
-	err = p.parse(resp.Body, p.subsets)
+	err = p.parse(resp.Body, subsets)
 	if err != nil {
 		p.logger.Error("Error parsing response", "host", host, "err", err)
 		errCh <- err
