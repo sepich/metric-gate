@@ -13,7 +13,7 @@ end
 Could be used in three modes:
 - [sidecar](#sidecar-mode), as a container in the same pod with a single target (as above)
 - [dns](#dns-mode), returns aggregated result of multiple targets
-- [subset](#subset-mode), subset metrics to separate endpoints
+- [subset](#subset-mode) metrics to separate endpoints
 
 ### Why?
 Consider the following example:
@@ -93,6 +93,7 @@ When request comes to `/metrics` endpoint of `metric-gate`, it (re)resolves `--u
 
 Continuing with our example above, this way you can reduce cardinality to the number of `ingress-nginx-controller` replicas.
 To do that, disable direct scrape of each replica Pod by Prometheus, and scrape only `metric-gate` instead.  
+
 Problems with this approach:
 - In this mode `/source` endpoint returns single random upstream IP output.
 - There is "automatic availability monitoring" based on [up](https://prometheus.io/docs/concepts/jobs_instances/#automatically-generated-labels-and-time-series) metric in Prometheus, which can detect when specific Target is down. In this case it only provides status of `metric-gate` itself, not the each `ingress-nginx-controller` replica.
@@ -106,6 +107,7 @@ Problems with this approach:
   | `sum(rate(metric))` | 0   | 0      | 0   |
   | `metric` aggregated | 30  | 10     | 10  |
   | `rate(metric)`      | 0   | 10/15s | 0   |
+  
   There are two pods (`a` and `b`) serving `metric` counter. At point in time `t2` we restart pod `b`. This works fine in prometheus, see [Rate then sum](https://www.robustperception.io/rate-then-sum-never-sum-then-rate/), as first `rate` is calculated and it sees drop of counter to 0. This leads to correct 0 result. Now we aggregate those two metrics into one (dropping `instance` label), and at point in time `t2` the value is 10. For `rate` that means that Counter reset happened (value of Counter is less than previous one) and now the value is 10, which reads as "in a scrape interval (15s) it dropped to 0 and then increased to 10", so `rate=10/15s=0.67/s` which is incorrect.
 
 Some of these issues could be solved by `subset` mode, read below.
