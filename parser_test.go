@@ -114,6 +114,40 @@ func TestParseLine(t *testing.T) {
 		}
 
 	}
+
+	// test cases that malformed input does not cause panic
+	errorCases := []struct {
+		name string
+		line string
+	}{
+		{
+			name: "truncated label value (missing closing quote)",
+			line: `nginx_ingress_controller_orphan_ingress{controller_class="k8s.io/nginx",controller_namespace="ingress-nginx",controller_pod="ingress-nginx-controller-webhook-8c4fd48d6-7bwqc",ingress="cm-acme-http-solver-chgl4`,
+		},
+		{
+			name: "line ending after equals sign",
+			line: `metric{label=`,
+		},
+		{
+			name: "line ending with spaces after equals",
+			line: `metric{label=   `,
+		},
+		{
+			name: "incomplete label section",
+			line: `metric{label`,
+		},
+		{
+			name: "missing label value quote",
+			line: `metric{label=value} 10`,
+		},
+	}
+
+	for _, c := range errorCases {
+		_, _, _, err := parseLine(c.line)
+		if err == nil {
+			t.Errorf("(%s) expected error for malformed input: %s", c.name, c.line)
+		}
+	}
 }
 
 func BenchmarkParseLine(b *testing.B) {

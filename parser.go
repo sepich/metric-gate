@@ -90,7 +90,7 @@ func parseLine(line string) (name string, lbls labels.Labels, value SVal, err er
 				}
 
 				// labelvalue
-				if line[i] != '"' {
+				if i >= len(line) || line[i] != '"' {
 					return "", nil, SVal{}, fmt.Errorf("invalid labelValue: %s", line)
 				}
 				i++
