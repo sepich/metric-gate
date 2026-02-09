@@ -60,6 +60,9 @@ func parseLine(line string) (name string, lbls labels.Labels, value SVal, err er
 			for {
 				for ; i < len(line) && line[i] == ' '; i++ {
 				}
+				if i >= len(line) {
+					return "", nil, SVal{}, fmt.Errorf("invalid labels: %s", line)
+				}
 				if line[i] == '}' {
 					i++
 					for ; i < len(line) && line[i] == ' '; i++ {
@@ -107,7 +110,7 @@ func parseLine(line string) (name string, lbls labels.Labels, value SVal, err er
 
 				for ; i < len(line) && line[i] == ' '; i++ {
 				}
-				if line[i] == ',' {
+				if i < len(line) && line[i] == ',' {
 					i++
 				}
 			}

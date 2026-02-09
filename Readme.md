@@ -257,5 +257,5 @@ How to relabel metrics to the original form?
 Possibly use `vmserver` instead of `vmagent`, to scrape `/federate` endpoint instead of remote-write, to allow for relabeling in scrape config on prometheus side
 - [otelcol](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/4968#issuecomment-2148753123) possible, but needs relabeling on the prometheus side to have metrics with original names
 - [grafana alloy](https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.processor.transform/) same as otelcol
-- [exporter_aggregator](https://github.com/tynany/exporter_aggregator) scape metrics from a list of Prometheus exporter endpoints and aggregate the values of any metrics with the same name and label/s. Same as `dns` mode, but with static list of upstreams
+- [exporter_aggregator](https://github.com/tynany/exporter_aggregator) scape metrics from a list of Prometheus exporter endpoints and aggregate the values of any metrics with the same name and labels. Same as `dns` mode, but with static list of upstreams
 - [telegraf](https://docs.influxdata.com/telegraf/v1/aggregator-plugins/merge/) and [vector](https://vector.dev/docs/reference/configuration/transforms/aggregate/#aggregation-behavior) cannot aggregate metrics like `sum() without(label)`, it is more like downsampling
