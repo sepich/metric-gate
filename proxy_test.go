@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -75,7 +76,7 @@ func TestAgg(t *testing.T) {
 		for s := range proxy.Opts.Relabel {
 			subsets[s] = NewSeries()
 		}
-		err := proxy.parse(strings.NewReader(c.input), subsets)
+		err := proxy.parse(context.Background(), strings.NewReader(c.input), subsets)
 		if err != nil {
 			t.Errorf("parse(%s) error = %v", c.input, err)
 		}

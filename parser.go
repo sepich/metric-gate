@@ -50,7 +50,7 @@ func parseLine(line string) (name string, lbls labels.Labels, value SVal, err er
 			name = line[i:j]
 			for ; j < len(line) && line[j] == ' '; j++ {
 			}
-			if line[j] != '{' {
+			if j >= len(line) || line[j] != '{' {
 				i = j
 				break
 			}

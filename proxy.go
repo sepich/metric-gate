@@ -222,7 +222,7 @@ func (p *Proxy) scrape(host string, subsets map[string]*Series, errCh chan error
 	}
 	defer resp.Body.Close()
 
-	err = p.parse(resp.Body, subsets)
+	err = p.parse(ctx, resp.Body, subsets)
 	if err != nil {
 		p.logger.Error("Error parsing response", "host", host, "err", err)
 		errCh <- err
@@ -239,13 +239,18 @@ func get(url string) (*http.Response, error) {
 }
 
 // parse unpacks and filters textformat
-func (p *Proxy) parse(r io.Reader, series map[string]*Series) error {
+func (p *Proxy) parse(ctx context.Context, r io.Reader, series map[string]*Series) error {
 	scanner := bufio.NewScanner(r)
 	lb := labels.NewBuilder(labels.EmptyLabels())
+	var n int
 	for scanner.Scan() {
 		line := scanner.Text()
 		metricName, lbls, value, err := parseLine(line)
 		if err != nil {
+			if ctx.Err() != nil {
+				p.logger.Warn("Scrape timeout reached, response truncated", "lines_parsed", n)
+				return nil
+			}
 			return err
 		}
 		if metricName == "" {
@@ -264,6 +269,10 @@ func (p *Proxy) parse(r io.Reader, series map[string]*Series) error {
 			ls := labelsString(lb.Labels())
 			series[subset].Add(metricName, ls, value)
 		}
+		n++
+	}
+	if err := scanner.Err(); err != nil && ctx.Err() != nil {
+		p.logger.Warn("Scrape timeout reached, result truncated", "lines_parsed", n)
 	}
 	return nil
 }
